@@ -1000,6 +1000,7 @@ create_fast_downward_library(
     NAME landmarks
     HELP "Plugin containing the code to reason with landmarks"
     SOURCES
+        landmarks/disj_action_landmark_graph
         landmarks/exploration
         landmarks/landmark
         landmarks/landmark_cost_partitioning_algorithms

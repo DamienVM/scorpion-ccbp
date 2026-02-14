@@ -9,6 +9,7 @@
 #include "../plugins/plugin.h"
 #include "../utils/logging.h"
 #include "../utils/timer.h"
+#include "disj_action_landmark_graph.h"
 
 #include <fstream>
 #include <memory>
@@ -176,6 +177,9 @@ shared_ptr<LandmarkGraph> LandmarkFactory::compute_landmark_graph(
     TaskProxy task_proxy(*task);
     compute_operators_providing_effect(task_proxy);
     generate_landmarks(task);
+
+    auto dalm_graph = new DisjActionLandmarkGraph(*landmark_graph, task_proxy.get_initial_state());
+    dalm_graph->dump_int_graph();
 
     log_landmark_graph_info(task_proxy, landmark_generation_timer);
     return landmark_graph;

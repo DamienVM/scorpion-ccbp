@@ -21,6 +21,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <fstream>
 
 using namespace std;
 using utils::ExitCode;
@@ -63,6 +64,7 @@ void LabelReduction::initialize(const TaskProxy &task_proxy) {
             transition_system_order.push_back(
                 max_transition_system_count - 1 - i);
     }
+    remove("reductions.txt");
 }
 
 void LabelReduction::compute_label_mapping(
@@ -86,10 +88,15 @@ void LabelReduction::compute_label_mapping(
             if (equivalent_labels.size() > 1) {
                 // Labels have to be sorted for LocalLabelInfo.
                 sort(equivalent_labels.begin(), equivalent_labels.end());
-                if (log.is_at_least_debug()) {
-                    log << "Reducing labels " << equivalent_labels << " to "
-                        << next_new_label << endl;
+                if (log.is_at_least_normal()) {
+                    log << "Reducing labels "
+                        << equivalent_labels << " to " << next_new_label << endl;
                 }
+                // TODO: to optimize
+                std::ofstream reductionStream;
+                reductionStream.open("reductions.txt", ios::app);
+                reductionStream << equivalent_labels << ">" << next_new_label << endl;
+                reductionStream.close();
                 label_mapping.push_back(
                     make_pair(next_new_label, equivalent_labels));
                 ++next_new_label;

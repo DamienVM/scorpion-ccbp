@@ -52,6 +52,8 @@ int OperatorCountingHeuristic::compute_heuristic(const State &ancestor_state) {
         }
     }
     int result;
+    lp_solver.write_lp("operator_counting.lp");
+    exit(0);
     lp_solver.solve();
     if (lp_solver.has_optimal_solution()) {
         double epsilon = 0.01;
