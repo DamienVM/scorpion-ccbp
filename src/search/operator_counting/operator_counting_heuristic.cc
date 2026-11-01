@@ -52,8 +52,6 @@ int OperatorCountingHeuristic::compute_heuristic(const State &ancestor_state) {
         }
     }
     int result;
-    lp_solver.write_lp("operator_counting.lp");
-    exit(0);
     lp_solver.solve();
     if (lp_solver.has_optimal_solution()) {
         double epsilon = 0.01;
@@ -64,6 +62,20 @@ int OperatorCountingHeuristic::compute_heuristic(const State &ancestor_state) {
     }
     lp_solver.clear_temporary_constraints();
     return result;
+}
+
+bool OperatorCountingHeuristic::write_lp(const State &ancestor_state, const string &path) {
+    State state = convert_ancestor_state(ancestor_state);
+    assert(!lp_solver.has_temporary_constraints());
+    for (const auto &generator : constraint_generators) {
+        if (generator->update_constraints(state, lp_solver)) {
+            lp_solver.clear_temporary_constraints();
+            return false;
+        }
+    }
+    lp_solver.write_lp(path);
+    lp_solver.clear_temporary_constraints();
+    return true;
 }
 
 class OperatorCountingHeuristicFeature

@@ -101,6 +101,10 @@ public:
       performed by the open list.)
     */
     void report_f_value_progress(int f);
+    // The f value of the last jump, -1 if none was reported.
+    int get_lastjump_f_value() const {
+        return lastjump_f_value;
+    }
     void print_checkpoint_line(int g) const;
 
     // output

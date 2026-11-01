@@ -205,8 +205,8 @@ void DisjActionLandmarkGraph::dump_graph() const {
     outFile << "}" << endl;
 }
 
-void DisjActionLandmarkGraph::dump_int_graph() const {
-    ofstream outFile("action_landmark_graph.txt");
+void DisjActionLandmarkGraph::dump_int_graph(const string &path) const {
+    ofstream outFile(path);
     outFile << lms.size() << endl << endl;
 
     for (size_t id = 0; id < lms.size(); ++id) {

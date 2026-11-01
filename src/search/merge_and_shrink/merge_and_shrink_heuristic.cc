@@ -14,7 +14,6 @@
 #include "../utils/system.h"
 
 #include <cassert>
-#include <fstream>
 #include <iostream>
 #include <utility>
 
@@ -22,152 +21,13 @@ using namespace std;
 using utils::ExitCode;
 
 namespace merge_and_shrink {
-static void print_vector(const vector<int> &vec, ofstream &out) {
-    for (int value : vec) {
-        out << value << " ";
-    }
-    out << endl;
-}
-
-static void write_automata_file(
-    const TaskProxy &task_proxy,
-    const FactoredTransitionSystem &fts,
-    LabelGrouping grouping,
-    ofstream &out) {
-    int num_labels = fts.get_labels().get_num_total_labels();
-    assert(num_labels == static_cast<int>(task_proxy.get_operators().size()));
-    out << "Actions: " << num_labels << endl;
-    bool non_unit_cost = !task_properties::is_unit_cost(task_proxy);
-    out << "NonUnitCost: " << non_unit_cost << endl;
-    out << "Costs:";
-    for (int cost :task_properties::get_operator_costs(task_proxy)) {
-        out << " " << cost;
-    }
-    out << endl;
-    int num_automata = fts.get_num_active_entries();
-    out << "Automata: " << num_automata << endl;
-    out << endl;
-    vector<vector<int>> equivalent_labels(num_labels);
-    for (auto active_index : fts) {
-        const TransitionSystem &ts = fts.get_transition_system(active_index);
-        //ts.dump_dot_graph();
-        int num_states = ts.get_size();
-        out << num_states << endl;
-        out << ts.get_init_state() << endl;
-
-        int num_goal_states = 0;
-        for (int i = 0; i < num_states; ++i) {
-            if (ts.is_goal_state(i)) {
-                ++num_goal_states;
-            }
-        }
-        out << num_goal_states << " ";
-        for (int i = 0; i < num_states; ++i) {
-            if (ts.is_goal_state(i)) {
-                out << " " << i;
-            }
-        }
-        out << endl;
-
-        // Compute number of local actions.
-        int num_local_actions = 0;
-        if (grouping == LabelGrouping::NONE) {
-            num_local_actions = num_labels;
-        } else if (grouping == LabelGrouping::LOCALLY_EQUIVALENT) {
-            for (const LocalLabelInfo &local_label_info : ts) {
-                // Only group locally equivalent labels with the same cost.
-                unordered_set<int> unique_costs;
-                for (int label : local_label_info.get_label_group()) {
-                    int cost = task_proxy.get_operators()[label].get_cost();
-                    unique_costs.insert(cost);
-                }
-                num_local_actions += unique_costs.size();
-            }
-        } else {
-            ABORT("Unknown label grouping.");
-        }
-
-        // For each local state s (rows) and for each local action o (columns):
-        // id of state to which we transition from s on o (-1 indicates no transition).
-        vector<vector<int>> transition_function(num_states);
-        for (auto &dest_states: transition_function) {
-            dest_states.resize(num_local_actions, -1);
-        }
-
-        // Compute global to local mapping and local transitions.
-        vector<int> global_to_local_map(num_labels, -1);
-        vector<int> local_action_costs(num_local_actions, -1);
-        if (grouping == LabelGrouping::NONE) {
-            // Identity function.
-            iota(global_to_local_map.begin(), global_to_local_map.end(), 0);
-
-            for (const LocalLabelInfo &local_label_info : ts) {
-                const LabelGroup &label_group = local_label_info.get_label_group();
-                const vector<Transition> &transitions = local_label_info.get_transitions();
-                for (int label : label_group) {
-                    local_action_costs[label] = task_proxy.get_operators()[label].get_cost();
-                    for (const Transition &transition : transitions) {
-                        transition_function[transition.src][label] = transition.target;
-                    }
-                }
-            }
-        } else if (grouping == LabelGrouping::LOCALLY_EQUIVALENT) {
-            int label_group_id = 0;
-            for (const LocalLabelInfo &local_label_info : ts) {
-                const LabelGroup &label_group = local_label_info.get_label_group();
-                // Only group locally equivalent labels with the same cost.
-                unordered_map<int, set<int>> cost_to_labels;
-                for (int label : label_group) {
-                    assert(utils::in_bounds(label, task_proxy.get_operators()));
-                    int cost = task_proxy.get_operators()[label].get_cost();
-                    cost_to_labels[cost].insert(label);
-                }
-                for (const auto &[cost, labels] : cost_to_labels) {
-                    for (int label : labels) {
-                        global_to_local_map[label] = label_group_id;
-                    }
-                    local_action_costs[label_group_id] = cost;
-                    for (const Transition &transition : local_label_info.get_transitions()) {
-                        transition_function[transition.src][label_group_id] = transition.target;
-                    }
-
-                    ++label_group_id;
-                }
-            }
-        } else {
-            ABORT("Unknown label grouping.");
-        }
-        assert(find(global_to_local_map.begin(), global_to_local_map.end(), -1) == global_to_local_map.end());
-        assert(find(local_action_costs.begin(), local_action_costs.end(), -1) == local_action_costs.end());
-
-        out << num_local_actions << endl;
-
-        // Map global actions to local actions.
-        print_vector(global_to_local_map, out);
-
-        for (auto &transitions : transition_function) {
-            print_vector(transitions, out);
-        }
-
-        // Local action costs flag (1 if local actions have different costs; 0 otherwise).
-        // bool non_unit_cost = !task_properties::is_unit_cost(task_proxy);
-        out << non_unit_cost << endl;
-
-        if (non_unit_cost) {
-            // For each local action print its integer cost.
-            print_vector(local_action_costs, out);
-        }
-        out << endl;
-    }
-}
-
 MergeAndShrinkHeuristic::MergeAndShrinkHeuristic(
     const shared_ptr<MergeStrategyFactory> &merge_strategy,
     const shared_ptr<ShrinkStrategy> &shrink_strategy,
     const shared_ptr<LabelReduction> &label_reduction,
     bool prune_unreachable_states, bool prune_irrelevant_states, int max_states,
     int max_states_before_merge, int threshold_before_merge,
-    double main_loop_max_time, LabelGrouping label_grouping, const shared_ptr<AbstractTask> &transform,
+    double main_loop_max_time, const shared_ptr<AbstractTask> &transform,
     bool cache_estimates, const string &description, utils::Verbosity verbosity)
     : Heuristic(transform, cache_estimates, description, verbosity) {
     log << "Initializing merge-and-shrink heuristic..." << endl;
@@ -178,16 +38,6 @@ MergeAndShrinkHeuristic::MergeAndShrinkHeuristic(
         verbosity);
     FactoredTransitionSystem fts =
         algorithm.build_factored_transition_system(task_proxy);
-
-    // Write automata file.
-    ofstream outfile("automata.txt");
-    if (outfile.rdstate() & ofstream::failbit) {
-        cerr << "Failed to open automata file." << endl;
-        utils::exit_with(utils::ExitCode::SEARCH_CRITICAL_ERROR);
-    }
-    write_automata_file(task_proxy, fts, label_grouping, outfile);
-    outfile.close();
-    exit(0);
 
     extract_factors(fts);
     log << "Done initializing merge-and-shrink heuristic." << endl << endl;
@@ -340,11 +190,6 @@ public:
         add_merge_and_shrink_algorithm_options_to_feature(*this);
         add_heuristic_options_to_feature(*this, "merge_and_shrink");
 
-        add_option<LabelGrouping>(
-            "label_grouping",
-            "how to group labels in automata",
-            "locally_equivalent");
-
         document_note(
             "Note",
             "Conditional effects are supported directly. Note, however, that "
@@ -404,9 +249,7 @@ public:
         const plugins::Options &opts) const override {
         return plugins::make_shared_from_arg_tuples<MergeAndShrinkHeuristic>(
             get_merge_and_shrink_algorithm_arguments_from_options(opts),
-            opts.get<LabelGrouping>("label_grouping"),
-            get_heuristic_arguments_from_options(opts)
-            );
+            get_heuristic_arguments_from_options(opts));
     }
 };
 

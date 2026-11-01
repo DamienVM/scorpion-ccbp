@@ -4,6 +4,7 @@
 #include "landmark_graph.h"
 
 #include <map>
+#include <string>
 #include <set>
 #include <vector>
 
@@ -65,7 +66,8 @@ public:
     std::vector<std::map<int, bool>> to_adj_list() const;
 
     void dump_graph() const;
-    void dump_int_graph() const;
+
+    void dump_int_graph(const std::string &path) const;
 };
 }
 

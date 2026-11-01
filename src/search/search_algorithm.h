@@ -114,6 +114,9 @@ public:
     int get_bound() {
         return bound;
     }
+    void set_max_time(double time) {
+        max_time = time;
+    }
     PlanManager &get_plan_manager() {
         return plan_manager;
     }

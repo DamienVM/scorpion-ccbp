@@ -27,6 +27,13 @@ public:
         bool use_integer_operator_counts, lp::LPSolverType lpsolver,
         const std::shared_ptr<AbstractTask> &transform, bool cache_estimates,
         const std::string &description, utils::Verbosity verbosity);
+
+    /*
+      Write the LP of the given state (with its temporary constraints) to
+      path. Returns false, writing nothing, if a constraint generator detects
+      a dead end.
+    */
+    bool write_lp(const State &ancestor_state, const std::string &path);
 };
 }
 

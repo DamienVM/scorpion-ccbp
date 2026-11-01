@@ -997,6 +997,32 @@ create_fast_downward_library(
 )
 
 create_fast_downward_library(
+    NAME ccbp
+    HELP "Automata of CCBP (Collaborative Constraint-Based Planning)"
+    SOURCES
+        ccbp/automata
+        ccbp/automaton_base
+        ccbp/ccbp_automata
+        ccbp/deterministic_sets
+        ccbp/label_reduction
+        ccbp/merge
+        ccbp/nd_automata
+        ccbp/nd_label_reduction
+        ccbp/operator_counting
+        ccbp/output
+        ccbp/partition
+        ccbp/pipeline
+        ccbp/preprocess
+        ccbp/reduction_loop
+        ccbp/remap
+    DEPENDS
+        landmarks
+        mas_heuristic
+        operator_counting
+        task_properties
+)
+
+create_fast_downward_library(
     NAME landmarks
     HELP "Plugin containing the code to reason with landmarks"
     SOURCES

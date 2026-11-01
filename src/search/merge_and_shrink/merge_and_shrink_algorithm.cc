@@ -552,9 +552,4 @@ tuple<int, int, int> get_transition_system_size_limit_arguments_from_options(
         opts.get<int>("max_states"), opts.get<int>("max_states_before_merge"),
         opts.get<int>("threshold_before_merge"));
 }
-
-static plugins::TypedEnumPlugin<LabelGrouping> _enum_plugin({
-        {"none", "don't group labels"},
-        {"locally_equivalent", "group labels that induce the same local transitions"},
-    });
 }
