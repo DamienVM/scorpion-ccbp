@@ -35,7 +35,9 @@ void write_nd_automata(const NDAutomata &automata, std::ostream &out);
   The global actions grouped by the behaviour of their local action (same
   successor sets in every state, same cost), as
   the former AutomatonND.get_global_equivalent_action_sets: each set sorted, the sets
-  ordered by their smallest action.
+  ordered by their smallest action. The automaton must be reduced
+  (reduce_local_equivalent_actions): two local actions then never behave the
+  same, so the sets are the global actions of each local action.
 */
 std::vector<std::vector<int>> equivalent_action_sets(const NDAutomaton &automaton);
 

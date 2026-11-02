@@ -72,6 +72,13 @@ void NDLabelReduction::set_operator_counting(OperatorCountingLP lp, vector<int> 
 }
 
 bool NDLabelReduction::apply_all_automata(NDAutomata &automata) {
+    /*
+      equivalent_action_sets needs reduced automata. The reductions of a pass
+      keep them reduced (apply_nd_reduction), but the steps before (shrinking)
+      may not.
+    */
+    for (NDAutomaton &automaton : automata.automata)
+        reduce_local_equivalent_actions(automaton);
     return reduce_all_automata(automata, NonDeterministicPolicy{}, state);
 }
 

@@ -76,14 +76,6 @@ void write_line(const vector<int> &values, ostream &out) {
     out << '\n';
 }
 
-const vector<int> *find_successors(const vector<pair<int, vector<int>>> &state_transitions, int local_action) {
-    auto it = lower_bound(state_transitions.begin(), state_transitions.end(), local_action,
-                          [](const pair<int, vector<int>> &entry, int action) {return entry.first < action;});
-    if (it == state_transitions.end() || it->first != local_action)
-        return nullptr;
-    return &it->second;
-}
-
 struct VectorHash {
     size_t operator()(const vector<int> &values) const {
         size_t hash = values.size();
@@ -148,35 +140,14 @@ void write_nd_automata(const NDAutomata &automata, ostream &out) {
 }
 
 vector<vector<int>> equivalent_action_sets(const NDAutomaton &automaton) {
-    // Signature of a local action: its successors in every state, then its cost.
+    // The automaton is reduced: one set per local action, in the order of their first global action.
     unordered_map<int, int> local_to_set;
-    unordered_map<vector<int>, int, VectorHash> signature_to_set;
     vector<vector<int>> sets;
     for (int action = 0; action < static_cast<int>(automaton.local_mapping.size()); ++action) {
-        int local_action = automaton.local_mapping[action];
-        auto local_it = local_to_set.find(local_action);
-        int set;
-        if (local_it != local_to_set.end()) {
-            set = local_it->second;
-        } else {
-            vector<int> signature;
-            for (const auto &state_transitions : automaton.transitions) {
-                const vector<int> *successors = find_successors(state_transitions, local_action);
-                if (successors) {
-                    signature.push_back(successors->size());
-                    signature.insert(signature.end(), successors->begin(), successors->end());
-                } else {
-                    signature.push_back(0);
-                }
-            }
-            signature.push_back(automaton.has_costs ? automaton.local_cost(local_action) : 0);
-            auto [it, inserted] = signature_to_set.try_emplace(move(signature), static_cast<int>(sets.size()));
-            if (inserted)
-                sets.emplace_back();
-            set = it->second;
-            local_to_set.emplace(local_action, set);
-        }
-        sets[set].push_back(action);
+        auto [it, inserted] = local_to_set.try_emplace(automaton.local_mapping[action], static_cast<int>(sets.size()));
+        if (inserted)
+            sets.emplace_back();
+        sets[it->second].push_back(action);
     }
     return sets;
 }
@@ -250,22 +221,43 @@ void apply_nd_reduction(NDAutomata &automata, int theta_index, const vector<vect
     for (size_t i = 0; i < automata.automata.size(); ++i) {
         NDAutomaton &automaton = automata.automata[i];
         if (static_cast<int>(i) == theta_index) {
+            // The new actions of each old local action (the groups holding one of its global actions), increasing.
+            vector<vector<int>> local_to_groups(automaton.num_local_actions);
+            for (int g = 0; g < num_new_actions; ++g) {
+                for (int old_action : groups[g]) {
+                    int local_action = automaton.local_mapping[old_action];
+                    if (local_action == -1)
+                        continue;
+                    vector<int> &local_groups = local_to_groups[local_action];
+                    if (local_groups.empty() || local_groups.back() != g)
+                        local_groups.push_back(g);
+                }
+            }
+            /*
+              In each state, the successors of a new action are the union of
+              those of its old local actions: each transition of the state is
+              added to the new actions of its local action.
+            */
             vector<vector<pair<int, vector<int>>>> new_transitions(automaton.num_states);
+            vector<vector<int>> group_successors(num_new_actions);
+            vector<int> touched;
             for (int state = 0; state < automaton.num_states; ++state) {
-                for (int g = 0; g < num_new_actions; ++g) {
-                    vector<int> successors;
-                    for (int old_action : groups[g]) {
-                        const vector<int> *old_successors =
-                            find_successors(automaton.transitions[state], automaton.local_mapping[old_action]);
-                        if (old_successors)
-                            successors.insert(successors.end(), old_successors->begin(), old_successors->end());
-                    }
-                    if (!successors.empty()) {
-                        sort(successors.begin(), successors.end());
-                        successors.erase(unique(successors.begin(), successors.end()), successors.end());
-                        new_transitions[state].emplace_back(g, move(successors));
+                for (const auto &[local_action, successors] : automaton.transitions[state]) {
+                    for (int g : local_to_groups[local_action]) {
+                        if (group_successors[g].empty())
+                            touched.push_back(g);
+                        group_successors[g].insert(group_successors[g].end(), successors.begin(), successors.end());
                     }
                 }
+                sort(touched.begin(), touched.end());
+                for (int g : touched) {
+                    vector<int> &successors = group_successors[g];
+                    sort(successors.begin(), successors.end());
+                    successors.erase(unique(successors.begin(), successors.end()), successors.end());
+                    new_transitions[state].emplace_back(g, move(successors));
+                    successors.clear();
+                }
+                touched.clear();
             }
             if (automaton.has_costs) {
                 vector<int> new_costs(num_new_actions);
@@ -278,13 +270,27 @@ void apply_nd_reduction(NDAutomata &automata, int theta_index, const vector<vect
                 automaton.local_mapping[g] = g;
             automaton.transitions = move(new_transitions);
             automaton.num_local_actions = num_new_actions;
+            reduce_local_equivalent_actions(automaton);
         } else {
+            /*
+              The old actions of a group cannot be told apart here: in a
+              reduced automaton, they share their local action, so the
+              automaton stays reduced and only its mapping changes. Otherwise,
+              reduce it again.
+            */
             vector<int> new_local_mapping(num_new_actions);
-            for (int g = 0; g < num_new_actions; ++g)
+            bool same_local_actions = true;
+            for (int g = 0; g < num_new_actions; ++g) {
                 new_local_mapping[g] = automaton.local_mapping[groups[g][0]];
+                for (int old_action : groups[g]) {
+                    if (automaton.local_mapping[old_action] != new_local_mapping[g])
+                        same_local_actions = false;
+                }
+            }
             automaton.local_mapping = move(new_local_mapping);
+            if (!same_local_actions)
+                reduce_local_equivalent_actions(automaton);
         }
-        reduce_local_equivalent_actions(automaton);
     }
 
     vector<int> new_costs(num_new_actions);
