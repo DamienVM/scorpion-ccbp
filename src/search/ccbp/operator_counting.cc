@@ -138,6 +138,7 @@ OperatorCountingLP read_operator_counting_lp(istream &in, ostream &log) {
     string block = content.substr(block_start, block_end - block_start);
 
     string carry;
+    int num_skipped = 0;
     size_t line_start = 0;
     while (line_start <= block.size()) {
         size_t line_end = block.find_first_of("\r\n", line_start);
@@ -185,12 +186,14 @@ OperatorCountingLP read_operator_counting_lp(istream &in, ostream &log) {
 
         if (!constraint.pos_actions.empty() || !constraint.neg_actions.empty()) {
             if (constraint.neg_actions.empty() && constraint.rhs <= 0)
-                log << "Skipping always satisfied constraint: " << candidate << '\n';
+                ++num_skipped;
             else
                 lp.constraints.push_back(move(constraint));
         }
         carry.clear();
     }
+    if (num_skipped > 0)
+        log << "Skipped " << num_skipped << " always satisfied operator-counting constraint(s)" << '\n';
     return lp;
 }
 

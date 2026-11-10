@@ -20,7 +20,7 @@ struct OpCountConstraint {
   "Subject To ... End" block, possibly over several lines, with terms such as
   "+ x5", "-x11", "2 x3" or "2*x3" (1-based ids). Constraints with only
   positive terms and a right-hand side <= 0 are always satisfied and skipped,
-  with the same message as the driver on `log`.
+  their number written on `log` with the same message as the driver.
 */
 struct OperatorCountingLP {
     std::vector<OpCountConstraint> constraints;
