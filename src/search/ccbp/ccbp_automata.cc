@@ -347,7 +347,7 @@ public:
         add_option<bool>("print_equivalent_actions_groups", "", "false");
         add_option<string>("exit_after", "equivalent_actions, opposite_actions_detection or empty", "\"\"");
         add_option<string>("mutex_actions_constraints", "", "\"none\"");
-        add_list_option<string>("consecutive_actions_constraints", "opposite, same, nop", "[]");
+        add_list_option<string>("consecutive_actions_constraints", "opposite, same, nop, commuting", "[]");
         add_option<bool>("print_nbr_sequential_actions_tuples", "", "false");
 
         add_option<int>("merge_min", "merge percentage, -1 for no merge", "-1");

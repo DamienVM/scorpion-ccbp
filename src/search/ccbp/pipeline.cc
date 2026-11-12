@@ -82,6 +82,93 @@ vector<pair<int, int>> opposite_operators(const vector<OperatorFacts> &operators
 }
 
 /*
+  The pairs of labels (l1, l2) with l1 > l2 whose actions commute: for all
+  actions a of l1 and b of l2, neither writes a variable that the other one
+  reads, and the effects on a shared variable assign the same value. In every
+  state where both are applicable, applying a then b is valid and leads to the
+  same state as b then a. Any plan can thus be rewritten into a plan of the
+  same cost where l1 is never directly followed by l2 (by swapping such pairs,
+  which reduces the number of label inversions), so the pair (l1, l2) can be
+  forbidden. action_labels[a] is the label of original operator a; labels
+  without an original operator (the no-op) commute with no label.
+*/
+vector<pair<int, int>> commuting_label_pairs(const vector<OperatorFacts> &operators, const vector<int> &action_labels,
+                                             int num_labels) {
+    const int CONFLICT = -1;
+    // The variables read by the actions of each label, and the value written to each variable (or CONFLICT if
+    // its actions write different values).
+    vector<set<int>> read_vars(num_labels);
+    vector<map<int, int>> written(num_labels);
+    vector<bool> has_actions(num_labels, false);
+    for (size_t op = 0; op < operators.size(); ++op) {
+        int label = action_labels[op];
+        has_actions[label] = true;
+        for (const FactPair &precondition : operators[op].preconditions)
+            read_vars[label].insert(precondition.var);
+        for (const FactPair &effect : operators[op].effects) {
+            auto [it, inserted] = written[label].try_emplace(effect.var, effect.value);
+            if (!inserted && it->second != effect.value)
+                it->second = CONFLICT;
+        }
+    }
+    vector<vector<int>> reads(num_labels);
+    vector<vector<pair<int, int>>> writes(num_labels); // sorted by variable
+    for (int label = 0; label < num_labels; ++label) {
+        reads[label].assign(read_vars[label].begin(), read_vars[label].end());
+        writes[label].assign(written[label].begin(), written[label].end());
+    }
+    read_vars.clear();
+    written.clear();
+
+    // No variable read by label r is written by label w.
+    auto reads_unwritten = [&](int r, int w) {
+        const vector<int> &read = reads[r];
+        const vector<pair<int, int>> &write = writes[w];
+        size_t i = 0, j = 0;
+        while (i < read.size() && j < write.size()) {
+            if (read[i] < write[j].first)
+                ++i;
+            else if (write[j].first < read[i])
+                ++j;
+            else
+                return false;
+        }
+        return true;
+    };
+    // The labels assign the same value to each variable written by both.
+    auto same_shared_writes = [&](int l1, int l2) {
+        const vector<pair<int, int>> &write1 = writes[l1];
+        const vector<pair<int, int>> &write2 = writes[l2];
+        size_t i = 0, j = 0;
+        while (i < write1.size() && j < write2.size()) {
+            if (write1[i].first < write2[j].first) {
+                ++i;
+            } else if (write2[j].first < write1[i].first) {
+                ++j;
+            } else {
+                if (write1[i].second == CONFLICT || write1[i].second != write2[j].second)
+                    return false;
+                ++i;
+                ++j;
+            }
+        }
+        return true;
+    };
+
+    vector<pair<int, int>> pairs;
+    for (int l1 = 0; l1 < num_labels; ++l1) {
+        if (!has_actions[l1])
+            continue;
+        for (int l2 = 0; l2 < l1; ++l2) {
+            if (has_actions[l2] && reads_unwritten(l1, l2) && reads_unwritten(l2, l1) && same_shared_writes(l1, l2))
+                pairs.emplace_back(l1, l2);
+        }
+    }
+    cout << "Found " << pairs.size() << " pairs of commuting labels" << endl;
+    return pairs;
+}
+
+/*
   SasProblem.get_count_sequential_operator_pairs: the ordered pairs of
   different operators where the second one is applicable after the first one,
   as far as their own facts tell.
@@ -125,6 +212,7 @@ struct ConsecutiveRelations {
     vector<vector<bool>> possible; // possible[a][b]: action b may follow action a
     bool has_opposite_pairs = false;
     vector<pair<int, int>> opposite_pairs;
+    bool commuting = false;
 };
 
 // The same relations over the labels of the CP automata, as written to the constraints file.
@@ -135,6 +223,8 @@ struct LabelRelations {
     vector<pair<int, int>> forbidden_successors;
     bool has_opposite_pairs = false;
     vector<pair<int, int>> opposite_pairs; // each pair forbids both orders
+    bool has_commuting_successors = false;
+    vector<pair<int, int>> commuting_successors;
 };
 
 /*
@@ -146,6 +236,8 @@ bool compute_consecutive_actions_relations(const AbstractTask &task, const vecto
                                            const PipelineOptions &options, ConsecutiveRelations &relations) {
     int num_operators = operators.size();
     bool has_no_op = options.no_op || options.no_op_2;
+    relations.commuting = options.has_consecutive_actions_constraints &&
+                          contains(options.consecutive_actions_constraints, "commuting");
     if (options.mutex_actions_constraints != "none" && num_operators < 100'000) {
         int n = num_operators + (has_no_op ? 1 : 0);
         vector<vector<bool>> possible(n, vector<bool>(n, true));
@@ -275,13 +367,17 @@ vector<bool> ruled_out_by_automata(const NDAutomata &automata, const vector<pair
   make the CP model larger.
 */
 LabelRelations translate_to_labels(const ConsecutiveRelations &relations, const vector<int> &action_labels,
-                                   const NDAutomata &automata) {
+                                   const NDAutomata &automata, const vector<OperatorFacts> &operators) {
     int num_labels = automata.num_actions();
     LabelRelations labels;
     labels.num_labels = num_labels;
     size_t num_ruled_out_successors = 0;
     size_t num_ruled_out_opposite = 0;
+    size_t num_ruled_out_commuting = 0;
     int num_actions = action_labels.size();
+    vector<pair<int, int>> commuting;
+    if (relations.commuting)
+        commuting = commuting_label_pairs(operators, action_labels, num_labels);
     if (relations.has_successors) {
         if (static_cast<int>(relations.possible.size()) != num_actions)
             throw runtime_error("The consecutive actions relations are not over the actions of the reductions");
@@ -294,6 +390,9 @@ LabelRelations translate_to_labels(const ConsecutiveRelations &relations, const 
                     label_row[action_labels[b]] = true;
             }
         }
+        for (auto [l1, l2] : commuting)
+            possible[l1][l2] = false;
+        commuting.clear();
         labels.has_successors = true;
         vector<pair<int, int>> forbidden;
         for (int l1 = 0; l1 < num_labels; ++l1) {
@@ -349,10 +448,22 @@ LabelRelations translate_to_labels(const ConsecutiveRelations &relations, const 
         }
         num_ruled_out_opposite = opposite_labels.size() - labels.opposite_pairs.size();
     }
+    if (relations.commuting && !relations.has_successors) {
+        // Without the successors relation (already including them), the commuting pairs are written on their own.
+        labels.has_commuting_successors = true;
+        vector<bool> ruled_out = ruled_out_by_automata(automata, commuting);
+        for (size_t i = 0; i < commuting.size(); ++i) {
+            if (!ruled_out[i])
+                labels.commuting_successors.push_back(commuting[i]);
+        }
+        num_ruled_out_commuting = commuting.size() - labels.commuting_successors.size();
+    }
     cout << "Consecutive actions relations over the labels: " << labels.forbidden_successors.size()
          << " forbidden pair(s) of labels (" << num_ruled_out_successors << " more already ruled out by the automata), "
          << labels.opposite_pairs.size() << " opposite pair(s) of labels (" << num_ruled_out_opposite
-         << " more already ruled out by the automata)" << endl;
+         << " more already ruled out by the automata), " << labels.commuting_successors.size()
+         << " commuting pair(s) of labels (" << num_ruled_out_commuting << " more already ruled out by the automata)"
+         << endl;
     return labels;
 }
 
@@ -434,6 +545,13 @@ void write_constraints(ostream &out, int num_labels, const string &lp_path, cons
         for (auto [a, b] : relations.opposite_pairs)
             out << a << ' ' << b << '\n';
         out << "end_opposite_pairs\n";
+    }
+    if (relations.has_commuting_successors) {
+        // The pairs (l1, l2) of commuting labels where l2 cannot directly follow l1.
+        out << "begin_commuting_successors\n" << relations.commuting_successors.size() << '\n';
+        for (auto [a, b] : relations.commuting_successors)
+            out << a << ' ' << b << '\n';
+        out << "end_commuting_successors\n";
     }
 }
 
@@ -799,10 +917,11 @@ int run_pipeline(const PipelineOptions &options, const AbstractTask &task, Autom
     vector<int> action_labels = reductions.original_action_to_label();
     if (options.no_op || options.no_op_2)
         action_labels.push_back(reductions.num_groups() - 1);
-    if ((consecutive_relations.has_successors || consecutive_relations.has_opposite_pairs) &&
+    if ((consecutive_relations.has_successors || consecutive_relations.has_opposite_pairs ||
+         consecutive_relations.commuting) &&
         reductions.num_groups() != nd_automata.num_actions())
         throw runtime_error("The consecutive actions relations cannot be translated to the labels of the CP automata");
-    LabelRelations label_relations = translate_to_labels(consecutive_relations, action_labels, nd_automata);
+    LabelRelations label_relations = translate_to_labels(consecutive_relations, action_labels, nd_automata, operators);
     write_file(options.constraints_path, [&](ostream &out) {
         write_constraints(out, nd_automata.num_actions(), lp_to_post, landmarks_to_post, label_relations);
     });

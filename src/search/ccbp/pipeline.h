@@ -25,7 +25,7 @@ struct PipelineOptions {
 
     // Consecutive actions relations (generateCPAutomataLocal).
     std::string mutex_actions_constraints = "none";
-    std::vector<std::string> consecutive_actions_constraints; // opposite, same, nop
+    std::vector<std::string> consecutive_actions_constraints; // opposite, same, nop, commuting
     bool has_consecutive_actions_constraints = false;
     bool print_nbr_sequential_actions_tuples = false;
 
