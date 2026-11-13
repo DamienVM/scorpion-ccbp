@@ -4,6 +4,10 @@
 
 #include "../utils/system.h"
 
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <string>
 
 using namespace std;
@@ -157,8 +161,85 @@ void SoPlexSolverInterface::solve() {
     soplex.optimize();
 }
 
+static string format_lp_number(double value) {
+    double rounded = round(value);
+    if (abs(value - rounded) < 1e-9 && abs(rounded) < 1e15)
+        return to_string(static_cast<long long>(rounded));
+    ostringstream out;
+    out << setprecision(17) << value;
+    return out.str();
+}
+
+static string format_lp_terms(const DSVectorReal &vector) {
+    string terms;
+    for (int k = 0; k < vector.size(); ++k) {
+        double value = vector.value(k);
+        if (value == 0)
+            continue;
+        string sign = value < 0 ? "-" : "+";
+        if (terms.empty())
+            terms = value < 0 ? "- " : "";
+        else
+            terms += " " + sign + " ";
+        double magnitude = abs(value);
+        if (magnitude != 1)
+            terms += format_lp_number(magnitude) + " ";
+        terms += "x" + to_string(vector.index(k) + 1);
+    }
+    return terms;
+}
+
 void SoPlexSolverInterface::write_lp(const string &filename) const {
-    soplex.writeFile(filename.c_str());
+    /*
+      Write the LP in the layout of CPLEX's LP files: rows c1, c2, ..., columns x1, x2, ... and integral coefficients
+      without decimals. SoPlex's own writer names the rows C0, C1, ..., starts the columns at x0 and writes every
+      number in scientific notation, which the readers of these files (e.g., ccbp) do not expect.
+    */
+    ofstream out(filename);
+    if (!out) {
+        cerr << "Cannot open " << filename << endl;
+        utils::exit_with(utils::ExitCode::SEARCH_CRITICAL_ERROR);
+    }
+    double inf = soplex.realParam(SoPlex::INFTY);
+    bool maximize = soplex.intParam(SoPlex::OBJSENSE) == SoPlex::OBJSENSE_MAXIMIZE;
+    out << "\\ Written by Scorpion's SoPlex interface in the CPLEX LP layout\n";
+    out << (maximize ? "Maximize" : "Minimize") << "\n obj:";
+    DSVectorReal objective(soplex.numCols());
+    for (int col = 0; col < soplex.numCols(); ++col) {
+        double value = soplex.objReal(col);
+        if (value != 0)
+            objective.add(col, value);
+    }
+    string objective_terms = format_lp_terms(objective);
+    out << (objective_terms.empty() ? "" : " " + objective_terms) << "\nSubject To\n";
+    int row_name = 0;
+    for (int row = 0; row < soplex.numRows(); ++row) {
+        DSVectorReal vector;
+        soplex.getRowVectorReal(row, vector);
+        string terms = format_lp_terms(vector);
+        double lhs = soplex.lhsReal(row);
+        double rhs = soplex.rhsReal(row);
+        if (lhs > -inf && rhs < inf && lhs == rhs) {
+            out << " c" << ++row_name << ": " << terms << " = " << format_lp_number(lhs) << '\n';
+            continue;
+        }
+        if (lhs > -inf)
+            out << " c" << ++row_name << ": " << terms << " >= " << format_lp_number(lhs) << '\n';
+        if (rhs < inf)
+            out << " c" << ++row_name << ": " << terms << " <= " << format_lp_number(rhs) << '\n';
+    }
+    out << "Bounds\n";
+    for (int col = 0; col < soplex.numCols(); ++col) {
+        double lower = soplex.lowerReal(col);
+        double upper = soplex.upperReal(col);
+        if (lower == 0 && upper >= inf)
+            continue;
+        string name = "x" + to_string(col + 1);
+        string lower_text = lower <= -inf ? "-inf" : format_lp_number(lower);
+        string upper_text = upper >= inf ? "+inf" : format_lp_number(upper);
+        out << ' ' << lower_text << " <= " << name << " <= " << upper_text << '\n';
+    }
+    out << "End\n";
 }
 
 void SoPlexSolverInterface::print_failure_analysis() const {
