@@ -4,7 +4,6 @@
 #include "cost_partitioning_heuristic.h"
 
 #include <algorithm>
-#include <execution>
 
 using namespace std;
 
@@ -44,15 +43,12 @@ UnsolvabilityHeuristic::UnsolvabilityHeuristic(
     // Remove lookup tables that only contain entries equal to 0 or infinity.
     for (auto &cp : cp_heuristics) {
         auto &tables = cp.lookup_tables;
-        tables.erase(
-            remove_if(
-                tables.begin(), tables.end(),
-                [](const CostPartitioningHeuristic::LookupTable &table) {
-                    return all_of(
-                        table.h_values.begin(), table.h_values.end(),
-                        [](int h) { return h == 0 || h == INF; });
-                }),
-            tables.end());
+        erase_if(
+            tables, [](const CostPartitioningHeuristic::LookupTable &table) {
+                return all_of(
+                    table.h_values.begin(), table.h_values.end(),
+                    [](int h) { return h == 0 || h == INF; });
+            });
         tables.shrink_to_fit();
     }
 }
@@ -60,8 +56,7 @@ UnsolvabilityHeuristic::UnsolvabilityHeuristic(
 bool UnsolvabilityHeuristic::is_unsolvable(
     const vector<int> &abstract_state_ids) const {
     return any_of(
-        execution::unseq, unsolvability_infos.begin(),
-        unsolvability_infos.end(),
+        unsolvability_infos.begin(), unsolvability_infos.end(),
         [&abstract_state_ids](const UnsolvabilityInfo &info) {
             return info
                 .unsolvable_states[abstract_state_ids[info.abstraction_id]];

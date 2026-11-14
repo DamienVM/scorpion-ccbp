@@ -10,6 +10,7 @@
 #include "../algorithms/partial_state_tree.h"
 #include "../plugins/plugin.h"
 #include "../task_utils/task_properties.h"
+#include "../utils/execution.h"
 #include "../utils/logging.h"
 
 using namespace std;
@@ -24,7 +25,9 @@ namespace cost_saturation {
 PhO::PhO(
     const Abstractions &abstractions, const vector<int> &costs,
     lp::LPSolverType solver_type, bool saturated, const utils::LogProxy &log)
-    : lp_solver(solver_type), log(log) {
+    : lp_solver(solver_type),
+      abstraction_has_unsolvable_states(abstractions.size(), false),
+      log(log) {
     double infinity = lp_solver.get_infinity();
     int num_abstractions = abstractions.size();
     int num_operators = costs.size();
@@ -35,6 +38,10 @@ PhO::PhO(
     for (int i = 0; i < num_abstractions; ++i) {
         const Abstraction &abstraction = *abstractions[i];
         vector<int> h_values = abstraction.compute_goal_distances(costs);
+        abstraction_has_unsolvable_states[i] =
+            any_of(utils::unseq, h_values.begin(), h_values.end(), [](int x) {
+                return x == cost_saturation::INF;
+            });
         vector<int> saturated_costs =
             abstraction.compute_saturated_costs(h_values);
         h_values_by_abstraction.push_back(move(h_values));
@@ -51,7 +58,8 @@ PhO::PhO(
     named_vector::NamedVector<lp::LPConstraint> constraints;
     constraints.reserve(num_operators);
     for (int op_id = 0; op_id < num_operators; ++op_id) {
-        lp::LPConstraint constraint(-infinity, costs[op_id]);
+        lp::LPConstraint constraint(
+            lp::LPConstraintSense::LESS_EQUAL, costs[op_id]);
         for (int i = 0; i < num_abstractions; ++i) {
             if (saturated) {
                 int scf_h = saturated_costs_by_abstraction[i][op_id];
@@ -112,8 +120,9 @@ CostPartitioningHeuristic PhO::compute_cost_partitioning(
     CostPartitioningHeuristic cp_heuristic;
     for (int i = 0; i < num_abstractions; ++i) {
         double weight = solution[i];
-        if (weight == 0.0) {
-            // This abstraction is assigned a weight of zero, so we can skip it.
+        if (weight == 0.0 && !abstraction_has_unsolvable_states[i]) {
+            // This abstraction is assigned a weight of zero and has no
+            // unsolvable states, so we can skip it.
             continue;
         }
         vector<int> weighted_h_values;
@@ -132,8 +141,38 @@ CostPartitioningHeuristic PhO::compute_cost_partitioning(
     return cp_heuristic;
 }
 
-class PhoFeature
-    : public plugins::TypedFeature<Evaluator, ScaledCostPartitioningHeuristic> {
+PhoHeuristic::PhoHeuristic(
+    const shared_ptr<AbstractTask> &task,
+    const vector<shared_ptr<AbstractionGenerator>> &abstraction_generators,
+    bool saturated, lp::LPSolverType lpsolver,
+    const shared_ptr<OrderGenerator> &order_generator, int max_orders,
+    int max_size_kb, double max_time, bool diversify, int num_samples,
+    double max_optimization_time, int random_seed, bool cache_estimates,
+    const string &description, utils::Verbosity verbosity)
+    : ScaledCostPartitioningHeuristic(
+          task, cache_estimates, description, verbosity) {
+    /* Our base class replaced the task by a copy with scaled costs, so we use
+       the scaled task (this->task) for all computations below. */
+    vector<int> costs = task_properties::get_operator_costs(task_proxy);
+    Abstractions abstractions =
+        generate_abstractions(this->task, abstraction_generators);
+    PhO pho(abstractions, costs, lpsolver, saturated, log);
+    CPFunction cp_function =
+        [&pho](
+            const Abstractions &abstractions_, const vector<int> &order_,
+            const vector<int> &costs_, const vector<int> &abstract_state_ids) {
+            return pho.compute_cost_partitioning(
+                abstractions_, order_, costs_, abstract_state_ids);
+        };
+    CPHeuristics cp_heuristics = compute_cp_heuristics(
+        task_proxy, abstractions, costs, cp_function, order_generator,
+        max_orders, max_size_kb, max_time, diversify, num_samples,
+        max_optimization_time, random_seed);
+    // TODO: extract dead ends.
+    set_cost_partitionings(move(abstractions), move(cp_heuristics), nullptr);
+}
+
+class PhoFeature : public plugins::TypedFeature<TaskIndependentEvaluator> {
 public:
     PhoFeature() : TypedFeature("pho") {
         document_subcategory("heuristics_cost_partitioning");
@@ -147,40 +186,15 @@ public:
         lp::add_lp_solver_option_to_feature(*this);
     }
 
-    virtual shared_ptr<ScaledCostPartitioningHeuristic> create_component(
+    virtual shared_ptr<TaskIndependentEvaluator> create_component(
         const plugins::Options &options) const override {
-        shared_ptr<AbstractTask> scaled_costs_task = get_scaled_costs_task(
-            options.get<shared_ptr<AbstractTask>>("transform"));
-
-        TaskProxy task_proxy(*scaled_costs_task);
-        vector<int> costs = task_properties::get_operator_costs(task_proxy);
-        Abstractions abstractions = generate_abstractions(
-            scaled_costs_task,
-            options.get_list<shared_ptr<AbstractionGenerator>>("abstractions"));
-        PhO pho(
-            abstractions, costs, options.get<lp::LPSolverType>("lpsolver"),
+        return components::make_auto_task_independent_component<
+            PhoHeuristic, Evaluator>(
+            get_abstraction_generator_list_from_options(options),
             options.get<bool>("saturated"),
-            utils::get_log_for_verbosity(
-                options.get<utils::Verbosity>("verbosity")));
-        CPFunction cp_function = [&pho](
-                                     const Abstractions &abstractions_,
-                                     const vector<int> &order_,
-                                     const vector<int> &costs_,
-                                     const vector<int> &abstract_state_ids) {
-            return pho.compute_cost_partitioning(
-                abstractions_, order_, costs_, abstract_state_ids);
-        };
-        vector<CostPartitioningHeuristic> cp_heuristics =
-            get_cp_heuristic_collection_generator_from_options(options)
-                ->generate_cost_partitionings(
-                    task_proxy, abstractions, costs, cp_function);
-        return plugins::make_shared_from_arg_tuples<
-            ScaledCostPartitioningHeuristic>(
-            move(abstractions), move(cp_heuristics),
-            // TODO: extract dead ends.
-            nullptr, scaled_costs_task, options.get<bool>("cache_estimates"),
-            options.get<string>("description"),
-            options.get<utils::Verbosity>("verbosity"));
+            lp::get_lp_solver_arguments_from_options(options),
+            get_order_arguments_from_options(options),
+            get_heuristic_arguments_from_options(options));
     }
 };
 

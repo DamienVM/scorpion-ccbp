@@ -26,9 +26,10 @@ protected:
 
 public:
     NoveltyEvaluator(
-        int width, const std::vector<std::shared_ptr<Evaluator>> &evals,
-        bool consider_only_novel_states,
-        const std::shared_ptr<AbstractTask> &transform, bool cache_estimates,
+        const std::shared_ptr<AbstractTask> &task, int width,
+        int max_variables_for_width2,
+        const std::vector<std::shared_ptr<Evaluator>> &evals,
+        bool consider_only_novel_states, bool cache_estimates,
         const std::string &description, utils::Verbosity verbosity);
     virtual ~NoveltyEvaluator() override;
 
@@ -37,23 +38,8 @@ public:
     virtual void notify_initial_state(const State &initial_state) override;
     virtual void notify_state_transition(
         const State &parent, OperatorID op_id, const State &state) override;
-    virtual bool dead_ends_are_reliable() const override;
-};
-
-// HACK: we need to notify landmark heuristics before evaluating the novelty
-// heuristics that depend on them.
-struct OrderNoveltyEvaluatorsLastHack {
-    bool operator()(const Evaluator *lhs, const Evaluator *rhs) const {
-        if (dynamic_cast<const novelty::NoveltyEvaluator *>(lhs) != nullptr &&
-            dynamic_cast<const novelty::NoveltyEvaluator *>(rhs) == nullptr) {
-            return false;
-        }
-        if (dynamic_cast<const novelty::NoveltyEvaluator *>(lhs) == nullptr &&
-            dynamic_cast<const novelty::NoveltyEvaluator *>(rhs) != nullptr) {
-            return true;
-        }
-        return lhs < rhs;
-    }
+    virtual bool is_safe() const override;
+    virtual bool must_be_notified_last() const override;
 };
 }
 

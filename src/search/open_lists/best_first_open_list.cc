@@ -8,6 +8,7 @@
 #include <cassert>
 #include <deque>
 #include <map>
+#include <optional>
 
 using namespace std;
 
@@ -29,6 +30,7 @@ public:
     BestFirstOpenList(const shared_ptr<Evaluator> &eval, bool preferred_only);
 
     virtual Entry remove_min() override;
+    virtual optional<int> get_min_entry_value(Evaluator *eval) const override;
     virtual bool empty() const override;
     virtual void clear() override;
     virtual void get_path_dependent_evaluators(
@@ -36,6 +38,7 @@ public:
     virtual bool is_dead_end(EvaluationContext &eval_context) const override;
     virtual bool is_reliable_dead_end(
         EvaluationContext &eval_context) const override;
+    virtual bool is_safe() const override;
 };
 
 template<class Entry>
@@ -68,6 +71,15 @@ Entry BestFirstOpenList<Entry>::remove_min() {
 }
 
 template<class Entry>
+optional<int>
+BestFirstOpenList<Entry>::get_min_entry_value(Evaluator *eval) const {
+    assert(size > 0);
+    if (eval == evaluator.get())
+        return buckets.begin()->first;
+    return nullopt;
+}
+
+template<class Entry>
 bool BestFirstOpenList<Entry>::empty() const {
     return size == 0;
 }
@@ -93,12 +105,21 @@ bool BestFirstOpenList<Entry>::is_dead_end(
 template<class Entry>
 bool BestFirstOpenList<Entry>::is_reliable_dead_end(
     EvaluationContext &eval_context) const {
-    return is_dead_end(eval_context) && evaluator->dead_ends_are_reliable();
+    return is_dead_end(eval_context) && evaluator->is_safe();
+}
+
+template<class Entry>
+bool BestFirstOpenList<Entry>::is_safe() const {
+    if (this->only_contains_preferred_entries()) {
+        return false;
+    }
+    return evaluator->is_safe();
 }
 
 BestFirstOpenListFactory::BestFirstOpenListFactory(
-    const shared_ptr<Evaluator> &eval, bool pref_only)
-    : eval(eval), pref_only(pref_only) {
+    const shared_ptr<AbstractTask> &task, const shared_ptr<Evaluator> &eval,
+    bool pref_only)
+    : OpenListFactory(task), eval(eval), pref_only(pref_only) {
 }
 
 unique_ptr<StateOpenList> BestFirstOpenListFactory::create_state_open_list() {
@@ -110,14 +131,14 @@ unique_ptr<EdgeOpenList> BestFirstOpenListFactory::create_edge_open_list() {
 }
 
 class BestFirstOpenListFeature
-    : public plugins::TypedFeature<OpenListFactory, BestFirstOpenListFactory> {
+    : public plugins::TypedFeature<TaskIndependentOpenListFactory> {
 public:
     BestFirstOpenListFeature() : TypedFeature("single") {
         document_title("Best-first open list");
         document_synopsis(
             "Open list that uses a single evaluator and FIFO tiebreaking.");
 
-        add_option<shared_ptr<Evaluator>>("eval", "evaluator");
+        add_option<shared_ptr<TaskIndependentEvaluator>>("eval", "evaluator");
         add_open_list_options_to_feature(*this);
 
         document_note(
@@ -129,10 +150,11 @@ public:
             "takes time O(log(n)), where n is the number of buckets.");
     }
 
-    virtual shared_ptr<BestFirstOpenListFactory> create_component(
+    virtual shared_ptr<TaskIndependentOpenListFactory> create_component(
         const plugins::Options &opts) const override {
-        return plugins::make_shared_from_arg_tuples<BestFirstOpenListFactory>(
-            opts.get<shared_ptr<Evaluator>>("eval"),
+        return components::make_auto_task_independent_component<
+            BestFirstOpenListFactory, OpenListFactory>(
+            opts.get<shared_ptr<TaskIndependentEvaluator>>("eval"),
             get_open_list_arguments_from_options(opts));
     }
 };

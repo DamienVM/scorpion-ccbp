@@ -1,6 +1,7 @@
 #ifndef SEARCH_ALGORITHMS_EAGER_SEARCH_H
 #define SEARCH_ALGORITHMS_EAGER_SEARCH_H
 
+#include "../evaluator.h"
 #include "../open_list.h"
 #include "../search_algorithm.h"
 
@@ -30,7 +31,8 @@ class EagerSearch : public SearchAlgorithm {
     std::shared_ptr<PruningMethod> pruning_method;
 
     void start_f_value_statistics(EvaluationContext &eval_context);
-    void update_f_value_statistics(EvaluationContext &eval_context);
+    void update_f_value_statistics(
+        EvaluationContext &eval_context, std::optional<int> f_value);
     void reward_progress();
 
     std::optional<SearchNode> get_next_node_to_expand();
@@ -45,7 +47,8 @@ protected:
     virtual SearchStatus step() override;
 
 public:
-    explicit EagerSearch(
+    EagerSearch(
+        const std::shared_ptr<AbstractTask> &task,
         const std::shared_ptr<OpenListFactory> &open, bool reopen_closed,
         const std::shared_ptr<Evaluator> &f_eval,
         const std::vector<std::shared_ptr<Evaluator>> &preferred,
@@ -57,13 +60,15 @@ public:
     virtual void print_statistics() const override;
 
     void dump_search_space() const;
+    virtual bool is_complete_within_bound() const override;
 };
 
 extern void add_eager_search_options_to_feature(
     plugins::Feature &feature, const std::string &description);
 extern std::tuple<
-    std::shared_ptr<PruningMethod>, std::shared_ptr<Evaluator>, OperatorCost,
-    int, double, std::string, utils::Verbosity>
+    std::shared_ptr<TaskIndependentPruningMethod>,
+    std::shared_ptr<TaskIndependentEvaluator>, OperatorCost, int, double,
+    std::string, utils::Verbosity>
 get_eager_search_arguments_from_options(const plugins::Options &opts);
 }
 

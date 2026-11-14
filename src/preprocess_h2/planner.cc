@@ -32,6 +32,7 @@ static void print_usage(const char *program_name) {
         << "  --add-implied-preconditions      Include augmented preconditions\n"
         << "  --add-implied-goals              Include augmented goals\n"
         << "  --show-expensive-statistics      Compute expensive statistics\n"
+        << "  --keep-duplicate-operators       Do not remove duplicate operators\n"
         << endl;
 }
 
@@ -59,6 +60,7 @@ void preprocess(int argc, const char **argv) {
     bool include_augmented_goals = false;
     bool expensive_statistics = false;
     bool disable_bw_h2 = false;
+    bool keep_duplicate_operators = false;
 
     bool metric;
     vector<Variable *> variables;
@@ -109,6 +111,8 @@ void preprocess(int argc, const char **argv) {
             include_augmented_goals = true;
         } else if (arg == "--show-expensive-statistics") {
             expensive_statistics = true;
+        } else if (arg == "--keep-duplicate-operators") {
+            keep_duplicate_operators = true;
         } else if (arg == "--outfile") {
             if (++i >= argc) {
                 parse_error(argv[0], "--outfile requires an argument");
@@ -149,7 +153,7 @@ void preprocess(int argc, const char **argv) {
         if (!compute_h2_mutexes(
                 ordering, operators, axioms, mutexes, initial_state, goals, h2,
                 disable_bw_h2)) {
-            generate_unsolvable_cpp_input(outfile);
+            generate_trivial_cpp_input(outfile, false);
             return;
         }
 
@@ -180,7 +184,7 @@ void preprocess(int argc, const char **argv) {
         strip_goals(goals);
         cout << "Change id of initial state" << endl;
         if (initial_state.remove_unreachable_atoms()) {
-            generate_unsolvable_cpp_input(outfile);
+            generate_trivial_cpp_input(outfile, false);
             return;
         }
 
@@ -209,6 +213,10 @@ void preprocess(int argc, const char **argv) {
         strip_operators(operators);
         strip_axioms(axioms);
         strip_goals(goals);
+    }
+
+    if (!keep_duplicate_operators) {
+        remove_duplicate_operators(operators);
     }
 
     // Output some task statistics
@@ -376,7 +384,12 @@ void preprocess(int argc, const char **argv) {
 
     cout << "Writing output..." << endl;
     if (ordering.empty()) {
-        generate_unsolvable_cpp_input(outfile);
+        // All variables have been pruned. The causal graph keeps all goal
+        // variables, so each of them has been pruned because it has a single
+        // reachable value. Since h^2 never marks initial-state or goal atoms
+        // as unreachable, this value is both the initial and the goal value.
+        // Thus, the goal holds in the initial state.
+        generate_trivial_cpp_input(outfile, true);
     } else {
         generate_cpp_input(
             ordering, metric, mutexes, initial_state, goals, operators, axioms,

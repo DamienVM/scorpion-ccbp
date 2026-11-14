@@ -1,6 +1,7 @@
 #ifndef EVALUATOR_H
 #define EVALUATOR_H
 
+#include "component.h"
 #include "evaluation_result.h"
 
 #include "utils/logging.h"
@@ -14,7 +15,7 @@ namespace plugins {
 class Options;
 }
 
-class Evaluator {
+class Evaluator : public components::TaskSpecificComponent {
 protected:
     std::string description;
     bool use_for_reporting_minima;
@@ -23,18 +24,29 @@ protected:
     mutable utils::LogProxy log;
 public:
     Evaluator(
+        const std::shared_ptr<AbstractTask> &task,
         bool use_for_reporting_minima, bool use_for_boosting,
         bool use_for_counting_evaluations, const std::string &description,
         utils::Verbosity verbosity);
-    virtual ~Evaluator() = default;
 
     /*
-      dead_ends_are_reliable should return true if the evaluator is
-      "safe", i.e., infinite estimates can be trusted.
+      Returns true only if all states with infinite evaluator value
+      are unsolvable.
 
       The default implementation returns true.
     */
-    virtual bool dead_ends_are_reliable() const;
+    virtual bool is_safe() const;
+
+    /*
+      Return true if this evaluator evaluates other path-dependent evaluators
+      when it is notified of the initial state or a state transition. Search
+      algorithms notify such evaluators after all other path-dependent
+      evaluators, so that the evaluators they use are up to date. Chains of
+      such evaluators are not supported.
+
+      The default implementation returns false.
+    */
+    virtual bool must_be_notified_last() const;
 
     /*
       get_path_dependent_evaluators should insert all path-dependent
@@ -96,6 +108,9 @@ public:
     */
     virtual int get_cached_estimate(const State &state) const;
 };
+
+using TaskIndependentEvaluator =
+    components::TaskIndependentComponent<Evaluator>;
 
 extern void add_evaluator_options_to_feature(
     plugins::Feature &feature, const std::string &description);

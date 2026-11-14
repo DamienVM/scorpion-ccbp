@@ -6,11 +6,11 @@
 #include "../pruning_method.h"
 
 #include "../algorithms/ordered_set.h"
-#include "../novelty/novelty_evaluator.h"
 #include "../plugins/options.h"
 #include "../task_utils/successor_generator.h"
 #include "../utils/logging.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdlib>
 #include <memory>
@@ -21,6 +21,7 @@ using namespace std;
 
 namespace eager_search {
 EagerSearch::EagerSearch(
+    const shared_ptr<AbstractTask> &task,
     const shared_ptr<OpenListFactory> &open, bool reopen_closed,
     const shared_ptr<Evaluator> &f_eval,
     const vector<shared_ptr<Evaluator>> &preferred,
@@ -28,7 +29,7 @@ EagerSearch::EagerSearch(
     const shared_ptr<Evaluator> &lazy_evaluator, OperatorCost cost_type,
     int bound, double max_time, const string &description,
     utils::Verbosity verbosity)
-    : SearchAlgorithm(cost_type, bound, max_time, description, verbosity),
+    : SearchAlgorithm(task, cost_type, bound, max_time, description, verbosity),
       reopen_closed_nodes(reopen_closed),
       open_list(open->create_state_open_list()),
       f_evaluator(f_eval), // default nullptr
@@ -78,11 +79,12 @@ void EagerSearch::initialize() {
 
     path_dependent_evaluators.assign(evals.begin(), evals.end());
 
-    // HACK: we need to notify landmark heuristics before evaluating the novelty
-    // heuristics that depend on them.
-    sort(
+    // Notify evaluators that use other path-dependent evaluators last.
+    stable_partition(
         path_dependent_evaluators.begin(), path_dependent_evaluators.end(),
-        novelty::OrderNoveltyEvaluatorsLastHack());
+        [](const Evaluator *evaluator) {
+            return !evaluator->must_be_notified_last();
+        });
 
     State initial_state = state_registry.get_initial_state();
     for (Evaluator *evaluator : path_dependent_evaluators) {
@@ -125,15 +127,17 @@ SearchStatus EagerSearch::step() {
     optional<SearchNode> node = get_next_node_to_expand();
     if (!node.has_value()) {
         assert(open_list->empty());
-        log << "Completely explored state space -- no solution!" << endl;
-        return FAILED;
+        return get_finished_search_status();
     }
-
     return expand(node.value());
 }
 
 optional<SearchNode> EagerSearch::get_next_node_to_expand() {
     while (!open_list->empty()) {
+        // Look up the f value before the open list discards it.
+        optional<int> f_value;
+        if (f_evaluator)
+            f_value = open_list->get_min_entry_value(f_evaluator.get());
         StateID id = open_list->remove_min();
         State s = state_registry.lookup_state(id);
         SearchNode node = search_space.get_node(s);
@@ -184,7 +188,7 @@ optional<SearchNode> EagerSearch::get_next_node_to_expand() {
 
         node.close();
         assert(!node.is_dead_end());
-        update_f_value_statistics(eval_context);
+        update_f_value_statistics(eval_context, f_value);
         return node;
     }
     return nullopt;
@@ -328,6 +332,10 @@ void EagerSearch::dump_search_space() const {
     search_space.dump(task_proxy);
 }
 
+bool EagerSearch::is_complete_within_bound() const {
+    return open_list->is_safe() && pruning_method->is_safe();
+}
+
 void EagerSearch::start_f_value_statistics(EvaluationContext &eval_context) {
     if (f_evaluator) {
         int f_value = eval_context.get_evaluator_value(f_evaluator.get());
@@ -335,13 +343,16 @@ void EagerSearch::start_f_value_statistics(EvaluationContext &eval_context) {
     }
 }
 
-/* TODO: HACK! This is very inefficient for simply looking up an h value.
-   Also, if h values are not saved it would recompute h for each and every
-   state. */
-void EagerSearch::update_f_value_statistics(EvaluationContext &eval_context) {
+/*
+  Prefer the f value that the open list stored for the expanded node (e.g., in
+  A*) over evaluating f_evaluator, which recomputes uncached heuristic values.
+*/
+void EagerSearch::update_f_value_statistics(
+    EvaluationContext &eval_context, optional<int> f_value) {
     if (f_evaluator) {
-        int f_value = eval_context.get_evaluator_value(f_evaluator.get());
-        statistics.report_f_value_progress(f_value);
+        if (!f_value)
+            f_value = eval_context.get_evaluator_value(f_evaluator.get());
+        statistics.report_f_value_progress(*f_value);
     }
 }
 
@@ -354,12 +365,14 @@ void add_eager_search_options_to_feature(
 }
 
 tuple<
-    shared_ptr<PruningMethod>, shared_ptr<Evaluator>, OperatorCost, int, double,
-    string, utils::Verbosity>
+    shared_ptr<TaskIndependentPruningMethod>,
+    shared_ptr<TaskIndependentEvaluator>, OperatorCost, int, double, string,
+    utils::Verbosity>
 get_eager_search_arguments_from_options(const plugins::Options &opts) {
     return tuple_cat(
         get_search_pruning_arguments_from_options(opts),
-        make_tuple(opts.get<shared_ptr<Evaluator>>("lazy_evaluator", nullptr)),
+        make_tuple(opts.get<shared_ptr<TaskIndependentEvaluator>>(
+            "lazy_evaluator", nullptr)),
         get_search_algorithm_arguments_from_options(opts));
 }
 }

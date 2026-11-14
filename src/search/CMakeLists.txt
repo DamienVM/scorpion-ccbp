@@ -1,4 +1,4 @@
-# See https://www.fast-downward.org/ForDevelopers/CMake
+# See https://www.fast-downward.org/latest/for-developers/cmake/
 # for general information on adding source files and CMake libraries.
 #
 # All libraries are enabled by default and users can disable them by specifying
@@ -94,6 +94,8 @@ create_fast_downward_library(
         abstract_task
         axioms
         command_line
+        component
+        component_internals
         evaluation_context
         evaluation_result
         evaluator
@@ -167,6 +169,7 @@ create_fast_downward_library(
         utils/countdown_timer
         utils/component_errors
         utils/exceptions
+        utils/execution
         utils/hash
         utils/language
         utils/logging
@@ -346,6 +349,16 @@ create_fast_downward_library(
     SOURCES
         evaluators/combining_evaluator
     DEPENDENCY_ONLY
+)
+
+create_fast_downward_library(
+    NAME modify_costs_evaluator
+    HELP "Evaluator modifying the costs"
+    SOURCES
+        evaluators/modify_costs_evaluator
+    DEPENDS
+        core_tasks
+        task_properties
 )
 
 create_fast_downward_library(
@@ -775,7 +788,6 @@ create_fast_downward_library(
         novelty/novelty_table
     DEPENDS
         task_properties
-    DEPENDENCY_ONLY
 )
 
 create_fast_downward_library(
@@ -841,6 +853,7 @@ create_fast_downward_library(
         task_utils/successor_generator_factory
         task_utils/successor_generator_internals
     DEPENDS
+        cartesian_set
         task_properties
     DEPENDENCY_ONLY
 )
@@ -872,6 +885,14 @@ create_fast_downward_library(
 )
 
 create_fast_downward_library(
+    NAME cartesian_set
+    HELP "Cartesian sets"
+    SOURCES
+        cartesian_abstractions/cartesian_set
+    DEPENDENCY_ONLY
+)
+
+create_fast_downward_library(
     NAME cegar
     HELP "Plugin containing the code for Cartesian CEGAR heuristics"
     SOURCES
@@ -879,7 +900,6 @@ create_fast_downward_library(
         cartesian_abstractions/abstract_state
         cartesian_abstractions/additive_cartesian_heuristic
         cartesian_abstractions/cartesian_heuristic_function
-        cartesian_abstractions/cartesian_set
         cartesian_abstractions/cegar
         cartesian_abstractions/cost_saturation
         cartesian_abstractions/flaw
@@ -897,11 +917,20 @@ create_fast_downward_library(
         cartesian_abstractions/utils_landmarks
     DEPENDS
         additive_heuristic
+        cartesian_set
         dynamic_bitset
         extra_tasks
         landmarks
         priority_queues
         task_properties
+)
+
+create_fast_downward_library(
+    NAME greedy_order_utils
+    HELP "Scoring functions for greedy orders"
+    SOURCES
+        cost_saturation/greedy_order_utils
+    DEPENDENCY_ONLY
 )
 
 create_fast_downward_library(
@@ -918,7 +947,6 @@ create_fast_downward_library(
         cost_saturation/diversifier
         cost_saturation/explicit_abstraction
         cost_saturation/explicit_projection_factory
-        cost_saturation/greedy_order_utils
         cost_saturation/max_cost_partitioning_heuristic
         cost_saturation/max_heuristic
         cost_saturation/optimal_cost_partitioning_heuristic
@@ -940,6 +968,7 @@ create_fast_downward_library(
         cost_saturation/zero_one_cost_partitioning_heuristic
     DEPENDS
         cegar
+        greedy_order_utils
         lp_solver
         pdbs
         partial_state_tree
@@ -1046,7 +1075,9 @@ create_fast_downward_library(
         landmarks/util
     DEPENDS
         default_value_axioms_task
+        greedy_order_utils
         lp_solver
+        max_cliques
         priority_queues
         successor_generator
         task_properties
@@ -1061,10 +1092,20 @@ create_fast_downward_library(
         operator_counting/delete_relaxation_rr_constraints
         operator_counting/lm_cut_constraints
         operator_counting/operator_counting_heuristic
-        operator_counting/pho_abstraction_constraints
         operator_counting/pho_constraints
         operator_counting/state_equation_constraints
     DEPENDS lp_solver landmark_cut_heuristic pdbs task_properties
+)
+
+create_fast_downward_library(
+    NAME pho_abstraction_constraints
+    HELP "Post-hoc optimization constraints for abstraction heuristics"
+    SOURCES
+        operator_counting/pho_abstraction_constraints
+    DEPENDS
+        cost_partitioning
+        lp_solver
+        operator_counting
 )
 
 create_fast_downward_library(
@@ -1089,10 +1130,8 @@ create_fast_downward_library(
         pdbs/pattern_collection_generator_multiple_random
         pdbs/pattern_collection_generator_multiple
         pdbs/pattern_collection_generator_systematic
-        pdbs/pattern_collection_generator_systematic_scp
         pdbs/pattern_database_factory
         pdbs/pattern_database
-        pdbs/pattern_evaluator
         pdbs/pattern_generator_cegar
         pdbs/pattern_generator_greedy
         pdbs/pattern_generator_manual
@@ -1116,6 +1155,19 @@ create_fast_downward_library(
         successor_generator
         task_properties
         variable_order_finder
+)
+
+create_fast_downward_library(
+    NAME pdbs_systematic_scp
+    HELP "Systematic pattern selection with saturated cost partitioning"
+    SOURCES
+        pdbs/pattern_collection_generator_systematic_scp
+        pdbs/pattern_evaluator
+    DEPENDS
+        cost_partitioning
+        partial_state_tree
+        pdbs
+        priority_queues
 )
 
 create_fast_downward_library(

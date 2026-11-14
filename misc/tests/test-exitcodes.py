@@ -19,16 +19,26 @@ TRANSLATE_TASKS = {
     "large": "satellite/p25-HC-pfile5.pddl",
 }
 
+# The resource-limit tests below pin the Python translator: the default C++
+# translator is fast and memory-lean enough that it finishes the "large" task
+# well within a 1s / 75M limit, so it never trips them. These tests check that
+# the driver maps the translator's out-of-time/out-of-memory exits to the right
+# codes, which the Python translator triggers reliably on this task.
 TRANSLATE_TESTS = [
     ("small", [], [], defaultdict(lambda: returncodes.SUCCESS)),
+    # Gripper has negated effects, which exercise Scorpion issue #35 on macOS/libc++.
+    ("small", ["--translator", "cpp"], [],
+     defaultdict(lambda: returncodes.SUCCESS)),
     # We cannot set time limits on Windows and thus expect DRIVER_UNSUPPORTED
     # as exit code in this case.
-    ("large", ["--translate-time-limit", "1s"], [], defaultdict(
+    ("large", ["--translator", "py", "--translate-time-limit", "1s"], [],
+     defaultdict(
         lambda: returncodes.TRANSLATE_OUT_OF_TIME,
         win32=returncodes.DRIVER_UNSUPPORTED)),
     # We cannot set/enforce memory limits on Windows/macOS and thus expect
     # DRIVER_UNSUPPORTED as exit code in those cases.
-    ("large", ["--translate-memory-limit", "75M"], [], defaultdict(
+    ("large", ["--translator", "py", "--translate-memory-limit", "75M"], [],
+     defaultdict(
         lambda: returncodes.TRANSLATE_OUT_OF_MEMORY,
         darwin=returncodes.DRIVER_UNSUPPORTED,
         win32=returncodes.DRIVER_UNSUPPORTED)),
@@ -38,6 +48,7 @@ SEARCH_TASKS = {
     "strips": "miconic/s1-0.pddl",
     "axioms": "philosophers/p01-phil2.pddl",
     "cond-eff": "miconic-simpleadl/s1-0.pddl",
+    "unsolvable": "blocks-unsolvable/probBLOCKS-4-0.pddl",
     "large": "satellite/p25-HC-pfile5.pddl",
 }
 
@@ -121,6 +132,42 @@ SEARCH_TESTS = [
         defaultdict(lambda: returncodes.SEARCH_UNSUPPORTED)),
     ("cond-eff", [], MERGE_AND_SHRINK,
         defaultdict(lambda: returncodes.SUCCESS)),
+    ("unsolvable", [], "astar(blind())",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVABLE)),
+    ("unsolvable", [], "astar(lmcut())",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVABLE)),
+    ("unsolvable", [], "lazy(single(lmcut()))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVABLE)),
+    ("unsolvable", [], "eager(alt([single(const(infinity)),single(const(1))]))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVABLE)),
+    ("unsolvable", [], "eager(type_based([const(infinity),const(1)]))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVABLE)),
+    ("unsolvable", [], "eager(pareto([const(infinity),const(1)]))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVABLE)),
+    ("unsolvable", [], "eager(tiebreaking([const(infinity),const(1)],unsafe_pruning=false))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVABLE)),
+    ("unsolvable", [], "astar(blind(),bound=2)",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVABLE_WITHIN_BOUND)),
+    # With bound 0, no plan can be within the bound, so a complete algorithm
+    # reports this even for a solvable task, while incomplete ones just fail.
+    ("strips", [], "astar(blind(),bound=0)",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVABLE_WITHIN_BOUND)),
+    ("strips", [], "iw(bound=0)",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVED_INCOMPLETE)),
+    ("unsolvable", [], "ehc(blind())",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVED_INCOMPLETE)),
+    ("unsolvable", [], "eager(single(blind(),pref_only=true))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVED_INCOMPLETE)),
+    ("unsolvable", [], "eager(pareto([blind()],pref_only=true))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVED_INCOMPLETE)),
+    ("unsolvable", [], "eager(pareto([cg(),cea()]))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVED_INCOMPLETE)),
+    ("unsolvable", [], "eager(tiebreaking([const(infinity),blind()]))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVED_INCOMPLETE)),
+    ("unsolvable", [], "eager(alt([single(cg()),single(const(infinity))]))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVED_INCOMPLETE)),
+    ("unsolvable", [], "lazy(type_based([cg(),const(infinity)]))",
+        defaultdict(lambda: returncodes.SEARCH_UNSOLVED_INCOMPLETE)),
     # We cannot set/enforce memory limits on Windows/macOS and thus expect
     # DRIVER_UNSUPPORTED as exit code in those cases.
     ("large", ["--search-memory-limit", "100M"], MERGE_AND_SHRINK,
