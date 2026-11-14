@@ -120,60 +120,27 @@ Automata compute_atomic_automata(const TaskProxy &task_proxy) {
 }
 }
 
-CCBPAutomata::CCBPAutomata(const plugins::Options &opts)
-    : SearchAlgorithm(opts),
-      unit_cost_automata(opts.get<bool>("unit_cost")),
-      operator_counting(opts.get<shared_ptr<Evaluator>>("operator_counting", nullptr)),
-      landmark_factory(opts.get<shared_ptr<landmarks::LandmarkFactory>>("landmarks", nullptr)),
-      lower_bound(opts.get<shared_ptr<Evaluator>>("lower_bound", nullptr)),
-      lower_bound_searches(opts.get_list<parser::LazyValue>("lower_bound_searches")),
-      upper_bound_searches(opts.get_list<parser::LazyValue>("upper_bound_searches")),
-      max_time_for_bounds(opts.get<double>("max_time_for_bounds")) {
-    options.manual_automata_path = opts.get<string>("manual_automata");
-    options.unit_cost = opts.get<bool>("unit_cost");
-    options.remove_mutex_transitions = opts.get<bool>("remove_mutex_transitions");
-    options.remove_equivalent_actions = opts.get<bool>("remove_equivalent_actions");
-    options.print_equivalent_actions_groups = opts.get<bool>("print_equivalent_actions_groups");
-    options.exit_after = opts.get<string>("exit_after");
-    options.mutex_actions_constraints = opts.get<string>("mutex_actions_constraints");
-    options.consecutive_actions_constraints = opts.get_list<string>("consecutive_actions_constraints");
-    options.has_consecutive_actions_constraints = !options.consecutive_actions_constraints.empty();
-    options.print_nbr_sequential_actions_tuples = opts.get<bool>("print_nbr_sequential_actions_tuples");
-    options.merge_min = opts.get<int>("merge_min");
-    options.merge_objects = opts.get<bool>("merge_objects");
-    options.merge_max_states = opts.get<int>("merge_max_states");
-    options.keep_unimportant_variables = opts.get<bool>("keep_unimportant_variables");
-    options.label_reduction = opts.get<string>("label_reduction");
-    options.nd_label_reduction = opts.get<string>("nd_label_reduction");
-    options.shrink = opts.get<bool>("shrink");
-    options.lr_fix_point = opts.get<bool>("lr_fix_point");
-    options.max_op_counting = opts.get<int>("max_op_counting");
-    options.post_operator_counting = opts.get<bool>("post_operator_counting");
-    options.post_landmarks = landmark_factory != nullptr;
-    options.no_op = opts.get<bool>("no_op");
-    options.no_op_2 = opts.get<bool>("no_op_2");
-    options.no_op_right_pad_constraints = opts.get<bool>("no_op_right_pad_constraints");
-    options.no_local_mapping = opts.get<bool>("no_local_mapping");
-    options.cp_automata_path = opts.get<string>("cp_automata");
-    options.constraints_path = opts.get<string>("constraints");
-    options.reductions_path = opts.get<string>("reductions");
-    options.simulation_automata_path = opts.get<string>("simulation_automata");
-    // The LP and the landmark graph over the original operators, next to the constraints file until they are in it.
-    string directory = filesystem::path(options.constraints_path).parent_path().string();
-    string prefix = directory.empty() ? "" : directory + "/";
-    if (operator_counting)
-        options.opc_lp_path = prefix + "operator_counting.lp";
-    if (landmark_factory)
-        options.landmark_graph_path = prefix + "action_landmark_graph.txt";
-    // Two integers that may not fit an int option (the driver's maximum is sys.maxsize); empty: compute them.
-    string plan_length = opts.get<string>("plan_length");
-    if (!plan_length.empty()) {
-        istringstream in(plan_length);
-        long long plan_min, plan_max;
-        if (!(in >> plan_min >> plan_max))
-            throw runtime_error("plan_length must hold the minimum and the maximum plan length");
-        fixed_plan_length = {plan_min, plan_max};
-    }
+CCBPAutomata::CCBPAutomata(
+    const shared_ptr<AbstractTask> &task, const PipelineOptions &options,
+    bool unit_cost_automata, const shared_ptr<Evaluator> &operator_counting,
+    const shared_ptr<landmarks::TaskIndependentLandmarkFactory> &landmark_factory,
+    const shared_ptr<Evaluator> &lower_bound,
+    const vector<shared_ptr<TaskIndependentSearchAlgorithm>> &lower_bound_searches,
+    const vector<shared_ptr<TaskIndependentSearchAlgorithm>> &upper_bound_searches,
+    double max_time_for_bounds,
+    const optional<pair<long long, long long>> &fixed_plan_length,
+    OperatorCost cost_type, int bound, double max_time,
+    const string &description, utils::Verbosity verbosity)
+    : SearchAlgorithm(task, cost_type, bound, max_time, description, verbosity),
+      options(options),
+      unit_cost_automata(unit_cost_automata),
+      operator_counting(operator_counting),
+      landmark_factory(landmark_factory),
+      lower_bound(lower_bound),
+      lower_bound_searches(lower_bound_searches),
+      upper_bound_searches(upper_bound_searches),
+      max_time_for_bounds(max_time_for_bounds),
+      fixed_plan_length(fixed_plan_length) {
 }
 
 void CCBPAutomata::write_constraint_inputs() {
@@ -181,14 +148,17 @@ void CCBPAutomata::write_constraint_inputs() {
     if (operator_counting) {
         auto heuristic = dynamic_pointer_cast<operator_counting::OperatorCountingHeuristic>(operator_counting);
         if (!heuristic)
-            throw runtime_error("operator_counting must be an operatorcounting(...) evaluator");
+            throw runtime_error(
+                "operator_counting must be an operatorcounting(...) evaluator, not wrapped in another "
+                "evaluator such as eval_modify_costs (with unit_cost=true, it uses unit costs already)");
         if (!heuristic->write_lp(initial_state, options.opc_lp_path))
             throw runtime_error("The task is unsolvable: the operator-counting constraints detect a dead end");
     }
     if (landmark_factory) {
         // Unit costs, as the landmark constraints count actions.
         shared_ptr<AbstractTask> unit_task = make_shared<tasks::CostAdaptedTask>(task, OperatorCost::ONE);
-        shared_ptr<landmarks::LandmarkGraph> graph = landmark_factory->compute_landmark_graph(unit_task);
+        shared_ptr<landmarks::LandmarkFactory> factory = landmark_factory->bind_task(unit_task);
+        shared_ptr<landmarks::LandmarkGraph> graph = factory->compute_landmark_graph(unit_task);
         landmarks::DisjActionLandmarkGraph action_graph(*graph, TaskProxy(*unit_task).get_initial_state());
         action_graph.dump_int_graph(options.landmark_graph_path);
     }
@@ -201,13 +171,9 @@ void CCBPAutomata::append_bounds(long long plan_min, long long plan_max) const {
     out << "begin_bounds\nplan_min " << plan_min << "\nplan_max " << plan_max << "\nend_bounds\n";
 }
 
-shared_ptr<SearchAlgorithm> CCBPAutomata::construct_search(const parser::LazyValue &config) const {
-    try {
-        return config.construct<shared_ptr<SearchAlgorithm>>();
-    } catch (const utils::ContextError &e) {
-        cerr << "Delayed construction of LazyValue failed" << endl << e.get_message() << endl;
-        utils::exit_with(utils::ExitCode::SEARCH_INPUT_ERROR);
-    }
+shared_ptr<SearchAlgorithm> CCBPAutomata::construct_search(
+    const shared_ptr<TaskIndependentSearchAlgorithm> &config) const {
+    return config->bind_task(task);
 }
 
 void CCBPAutomata::compute_bounds(long long automata_lower_bound) {
@@ -238,7 +204,7 @@ void CCBPAutomata::compute_bounds(long long automata_lower_bound) {
     const pair<long long, long long> written_bounds(plan_min, plan_max);
 
     // Then the searches, within max_time_for_bounds seconds (the first upper bound search has no time limit).
-    for (const parser::LazyValue &config : lower_bound_searches) {
+    for (const shared_ptr<TaskIndependentSearchAlgorithm> &config : lower_bound_searches) {
         double remaining_time = max_time_for_bounds - timer();
         if (remaining_time <= 0)
             break;
@@ -322,7 +288,76 @@ SearchStatus CCBPAutomata::step() {
 void CCBPAutomata::print_statistics() const {
 }
 
-class CCBPAutomataFeature : public plugins::TypedFeature<SearchAlgorithm, CCBPAutomata> {
+class TaskIndependentCCBPAutomata : public TaskIndependentSearchAlgorithm {
+    PipelineOptions options;
+    bool unit_cost_automata;
+    shared_ptr<TaskIndependentEvaluator> operator_counting;
+    shared_ptr<landmarks::TaskIndependentLandmarkFactory> landmark_factory;
+    shared_ptr<TaskIndependentEvaluator> lower_bound;
+    vector<shared_ptr<TaskIndependentSearchAlgorithm>> lower_bound_searches;
+    vector<shared_ptr<TaskIndependentSearchAlgorithm>> upper_bound_searches;
+    double max_time_for_bounds;
+    optional<pair<long long, long long>> fixed_plan_length;
+    OperatorCost cost_type;
+    int bound;
+    double max_time;
+    string description;
+    utils::Verbosity verbosity;
+
+    static shared_ptr<Evaluator> bind_optional(
+        const shared_ptr<TaskIndependentEvaluator> &evaluator,
+        const shared_ptr<AbstractTask> &task) {
+        return evaluator ? evaluator->bind_task(task) : nullptr;
+    }
+
+protected:
+    virtual shared_ptr<SearchAlgorithm> create_task_specific_component(
+        const shared_ptr<AbstractTask> &task) const override {
+        /*
+          With unit costs, the operator-counting constraints count actions, to
+          match the objective of the CP model (the plan length).
+        */
+        shared_ptr<AbstractTask> operator_counting_task = task;
+        if (unit_cost_automata)
+            operator_counting_task = make_shared<tasks::CostAdaptedTask>(task, OperatorCost::ONE);
+        return make_shared<CCBPAutomata>(
+            task, options, unit_cost_automata,
+            bind_optional(operator_counting, operator_counting_task), landmark_factory,
+            bind_optional(lower_bound, task), lower_bound_searches,
+            upper_bound_searches, max_time_for_bounds, fixed_plan_length,
+            cost_type, bound, max_time, description, verbosity);
+    }
+
+public:
+    TaskIndependentCCBPAutomata(
+        const PipelineOptions &options, bool unit_cost_automata,
+        const shared_ptr<TaskIndependentEvaluator> &operator_counting,
+        const shared_ptr<landmarks::TaskIndependentLandmarkFactory> &landmark_factory,
+        const shared_ptr<TaskIndependentEvaluator> &lower_bound,
+        const vector<shared_ptr<TaskIndependentSearchAlgorithm>> &lower_bound_searches,
+        const vector<shared_ptr<TaskIndependentSearchAlgorithm>> &upper_bound_searches,
+        double max_time_for_bounds,
+        const optional<pair<long long, long long>> &fixed_plan_length,
+        OperatorCost cost_type, int bound, double max_time,
+        const string &description, utils::Verbosity verbosity)
+        : options(options),
+          unit_cost_automata(unit_cost_automata),
+          operator_counting(operator_counting),
+          landmark_factory(landmark_factory),
+          lower_bound(lower_bound),
+          lower_bound_searches(lower_bound_searches),
+          upper_bound_searches(upper_bound_searches),
+          max_time_for_bounds(max_time_for_bounds),
+          fixed_plan_length(fixed_plan_length),
+          cost_type(cost_type),
+          bound(bound),
+          max_time(max_time),
+          description(description),
+          verbosity(verbosity) {
+    }
+};
+
+class CCBPAutomataFeature : public plugins::TypedFeature<TaskIndependentSearchAlgorithm> {
 public:
     CCBPAutomataFeature() : TypedFeature("ccbp_automata") {
         document_title("CCBP automata");
@@ -365,14 +400,15 @@ public:
         add_option<bool>("shrink", "exact bisimulation after each merge and after the label reduction", "false");
         add_option<bool>("lr_fix_point", "", "false");
 
-        add_option<shared_ptr<Evaluator>>(
+        add_option<shared_ptr<TaskIndependentEvaluator>>(
             "operator_counting",
             "operatorcounting(...) evaluator whose LP in the initial state gives the operator-counting "
-            "constraints (lropc strategies, post_operator_counting)",
+            "constraints (lropc strategies, post_operator_counting). With unit_cost=true, it is evaluated "
+            "with unit costs.",
             plugins::ArgumentInfo::NO_DEFAULT);
         add_option<bool>("post_operator_counting", "write the operator-counting constraints", "false");
         add_option<int>("max_op_counting", "", "-1");
-        add_option<shared_ptr<landmarks::LandmarkFactory>>(
+        add_option<shared_ptr<landmarks::TaskIndependentLandmarkFactory>>(
             "landmarks", "landmark factory of the action landmark constraints (written if given)",
             plugins::ArgumentInfo::NO_DEFAULT);
 
@@ -383,33 +419,83 @@ public:
 
         add_option<string>("plan_length", "given plan length bounds as \"MIN MAX\" (empty: compute them)",
                            "\"\"");
-        add_option<shared_ptr<Evaluator>>(
+        add_option<shared_ptr<TaskIndependentEvaluator>>(
             "lower_bound", "heuristic whose initial value is a plan length lower bound",
             plugins::ArgumentInfo::NO_DEFAULT);
-        add_list_option<shared_ptr<SearchAlgorithm>>(
+        add_list_option<shared_ptr<TaskIndependentSearchAlgorithm>>(
             "lower_bound_searches",
             "optimal searches with unit costs, for a better lower bound within max_time_for_bounds",
-            plugins::ArgumentInfo::NO_DEFAULT, true);
-        add_list_option<shared_ptr<SearchAlgorithm>>(
+            "[]");
+        add_list_option<shared_ptr<TaskIndependentSearchAlgorithm>>(
             "upper_bound_searches",
             "searches for an upper bound: the first one without time limit, the next ones bounded by the best "
             "plan length, within max_time_for_bounds",
-            plugins::ArgumentInfo::NO_DEFAULT, true);
+            "[]");
         add_option<double>("max_time_for_bounds", "time for the bounds searches, in seconds", "0");
 
         add_search_algorithm_options_to_feature(*this, "ccbp_automata");
     }
 
-    virtual shared_ptr<CCBPAutomata> create_component(const plugins::Options &opts) const override {
-        // Unpack the first layer of laziness of the search lists, as iterated search does.
-        plugins::Options options_copy(opts);
-        for (const char *key : {"lower_bound_searches", "upper_bound_searches"}) {
-            vector<parser::LazyValue> searches;
-            if (opts.contains(key))
-                searches = opts.get<parser::LazyValue>(key).construct_lazy_list();
-            options_copy.set(key, searches);
+    virtual shared_ptr<TaskIndependentSearchAlgorithm> create_component(
+        const plugins::Options &opts) const override {
+        auto landmark_factory = opts.get<shared_ptr<landmarks::TaskIndependentLandmarkFactory>>(
+            "landmarks", nullptr);
+        PipelineOptions options;
+        options.manual_automata_path = opts.get<string>("manual_automata");
+        options.unit_cost = opts.get<bool>("unit_cost");
+        options.remove_mutex_transitions = opts.get<bool>("remove_mutex_transitions");
+        options.remove_equivalent_actions = opts.get<bool>("remove_equivalent_actions");
+        options.print_equivalent_actions_groups = opts.get<bool>("print_equivalent_actions_groups");
+        options.exit_after = opts.get<string>("exit_after");
+        options.mutex_actions_constraints = opts.get<string>("mutex_actions_constraints");
+        options.consecutive_actions_constraints = opts.get_list<string>("consecutive_actions_constraints");
+        options.has_consecutive_actions_constraints = !options.consecutive_actions_constraints.empty();
+        options.print_nbr_sequential_actions_tuples = opts.get<bool>("print_nbr_sequential_actions_tuples");
+        options.merge_min = opts.get<int>("merge_min");
+        options.merge_objects = opts.get<bool>("merge_objects");
+        options.merge_max_states = opts.get<int>("merge_max_states");
+        options.keep_unimportant_variables = opts.get<bool>("keep_unimportant_variables");
+        options.label_reduction = opts.get<string>("label_reduction");
+        options.nd_label_reduction = opts.get<string>("nd_label_reduction");
+        options.shrink = opts.get<bool>("shrink");
+        options.lr_fix_point = opts.get<bool>("lr_fix_point");
+        options.max_op_counting = opts.get<int>("max_op_counting");
+        options.post_operator_counting = opts.get<bool>("post_operator_counting");
+        options.post_landmarks = landmark_factory != nullptr;
+        options.no_op = opts.get<bool>("no_op");
+        options.no_op_2 = opts.get<bool>("no_op_2");
+        options.no_op_right_pad_constraints = opts.get<bool>("no_op_right_pad_constraints");
+        options.no_local_mapping = opts.get<bool>("no_local_mapping");
+        options.cp_automata_path = opts.get<string>("cp_automata");
+        options.constraints_path = opts.get<string>("constraints");
+        options.reductions_path = opts.get<string>("reductions");
+        options.simulation_automata_path = opts.get<string>("simulation_automata");
+        auto operator_counting = opts.get<shared_ptr<TaskIndependentEvaluator>>(
+            "operator_counting", nullptr);
+        // The LP and the landmark graph over the original operators, next to the constraints file until they are in it.
+        string directory = filesystem::path(options.constraints_path).parent_path().string();
+        string prefix = directory.empty() ? "" : directory + "/";
+        if (operator_counting)
+            options.opc_lp_path = prefix + "operator_counting.lp";
+        if (landmark_factory)
+            options.landmark_graph_path = prefix + "action_landmark_graph.txt";
+        // Two integers that may not fit an int option (the driver's maximum is sys.maxsize); empty: compute them.
+        optional<pair<long long, long long>> fixed_plan_length;
+        string plan_length = opts.get<string>("plan_length");
+        if (!plan_length.empty()) {
+            istringstream in(plan_length);
+            long long plan_min, plan_max;
+            if (!(in >> plan_min >> plan_max))
+                throw runtime_error("plan_length must hold the minimum and the maximum plan length");
+            fixed_plan_length = make_pair(plan_min, plan_max);
         }
-        return make_shared<CCBPAutomata>(options_copy);
+        return components::make_shared_from_arg_tuples<TaskIndependentCCBPAutomata>(
+            options, opts.get<bool>("unit_cost"), operator_counting, landmark_factory,
+            opts.get<shared_ptr<TaskIndependentEvaluator>>("lower_bound", nullptr),
+            opts.get_list<shared_ptr<TaskIndependentSearchAlgorithm>>("lower_bound_searches"),
+            opts.get_list<shared_ptr<TaskIndependentSearchAlgorithm>>("upper_bound_searches"),
+            opts.get<double>("max_time_for_bounds"), fixed_plan_length,
+            get_search_algorithm_arguments_from_options(opts));
     }
 };
 
